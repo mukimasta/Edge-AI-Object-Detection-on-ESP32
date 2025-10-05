@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Detector</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-top: 0;
+            margin-bottom: 20px;
+        }
+        .main-container {
+            max-width: 100%;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        .content-wrapper {
+            display: flex;
+            flex-direction: row;
+            gap: 20px;
+        }
+        .left-column {
+            flex: 7; /* Takes 70% of the space */
+        }
+        .right-column {
+            flex: 3; /* Takes 30% of the space */
+            display: flex;
+            flex-direction: column;
+        }
+        .image-container {
+            width: 100%;
+            margin-bottom: 20px;
+            position: relative;
+        }
+        #detection-image {
+            width: 100%;
+            border: 1px solid #ddd;
+        }
+        .detection-results {
+            margin-bottom: 20px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            background-color: #f9f9f9;
+        }
+        .system-messages {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+        .system-messages h2 {
+            margin-top: 0;
+        }
+        .messages-container {
+            height: 80vh; /* Set height using viewport height */
+            overflow-y: auto; /* Enable scrolling when content exceeds height */
+            padding: 10px;
+            background-color: #f0f0f0;
+            border: 1px solid #ddd;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .messages-list {
+            display: flex;
+            flex-direction: column;
+        }
+        .message {
+            margin: 5px 0;
+            padding: 5px;
+            border-bottom: 1px solid #ddd;
+        }
+        .detection-box {
+            position: absolute;
+            border: 2px solid;
+            box-sizing: border-box;
+            pointer-events: none;
+        }
+        .detection-label {
+            position: absolute;
+            top: -20px;
+            left: 0;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 2px 5px;
+            font-size: 12px;
+            border-radius: 3px;
+        }
+        .detection-item {
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+            background-color: #f5f5f5;
+        }
+        .detection-class {
+            font-weight: bold;
+            color: #333;
+        }
+        .detection-score {
+            color: #666;
+        }
+        .detection-coordinates {
+            font-family: monospace;
+            margin-top: 5px;
+        }
+        .timestamp {
+            font-style: italic;
+            color: #666;
+            text-align: right;
+        }
+        @media (max-width: 768px) {
+            .content-wrapper {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="main-container">
+        <h1>ESP32 Pedestrian Detector</h1>
+        
+        <div class="content-wrapper">
+            <div class="left-column">
+                <div class="image-container" id="image-container">
+                    <h2>Live Detection Feed</h2>
+                    <img id="detection-image" alt="Live Feed">
+                    <!-- Detection boxes will be added here dynamically -->
+                </div>
+                
+                <div class="detection-results">
+                    <h2>Detection Results</h2>
+                    <div id="detection-data">Waiting for detections...</div>
+                </div>
+            </div>
+            
+            <div class="right-column">
+                <div class="system-messages">
+                    <h2>System Messages</h2>
+                    <div class="messages-container">
+                        <div class="messages-list" id="messages"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const img = document.getElementById('detection-image');
+        const imageContainer = document.getElementById('image-container');
+        let currentData = null;
+
+        function updateImage() {
+            // Fetch detection data first
+            fetch('/detection-data')
+                .then(response => response.json())
+                .then(data => {
+                    currentData = data;
+                    // Then update the image with timestamp to avoid caching
+                    img.src = `/stream?t=${Date.now()}`;
+                    
+                    // Update detection results display
+                    updateDetectionDisplay(data);
+                })
+                .catch(error => {
+                    console.error('Error fetching detection data:', error);
+                    // Still try to load the image even if detection data fails
+                    img.src = `/stream?t=${Date.now()}`;
+                });
+
+            // Schedule next update
+            setTimeout(updateImage, 500); // Update every 1 second
+        }
+
+        // Draw boxes after image loads
+        img.onload = function() {
+            if (currentData) {
+                drawDetectionBoxes(currentData);
+            }
+        };
+
+        // Start updating the image and detection data
+        updateImage();
+
+        // Update the detection display with the received data
+        function updateDetectionDisplay(data) {
+            const detectionContainer = document.getElementById('detection-data');
+            detectionContainer.innerHTML = '';
+            
+            // Add timestamp
+            const timeElement = document.createElement('div');
+            timeElement.className = 'timestamp';
+            const date = new Date(data.timestamp);
+            timeElement.textContent = `Last update: ${date.toLocaleTimeString()}`;
+            detectionContainer.appendChild(timeElement);
+            
+            // Check if we have detections
+            if (!data.detections || data.detections.length === 0) {
+                const noDetection = document.createElement('p');
+                noDetection.textContent = 'No detections available.';
+                detectionContainer.appendChild(noDetection);
+                return;
+            }
+            
+            // Display each detection
+            data.detections.forEach(detection => {
+                const detectionItem = document.createElement('div');
+                detectionItem.className = 'detection-item';
+                
+                const classElement = document.createElement('div');
+                classElement.className = 'detection-class';
+                classElement.textContent = `Class: ${detection.class}`;
+                detectionItem.appendChild(classElement);
+                
+                const scoreElement = document.createElement('div');
+                scoreElement.className = 'detection-score';
+                scoreElement.textContent = `Confidence: ${Math.round(detection.score * 100)}%`;
+                detectionItem.appendChild(scoreElement);
+                
+                const coordinatesElement = document.createElement('div');
+                coordinatesElement.className = 'detection-coordinates';
+                coordinatesElement.textContent = `Coordinates: [${detection.bbox_absolute.join(', ')}]`;
+                detectionItem.appendChild(coordinatesElement);
+                
+                detectionContainer.appendChild(detectionItem);
+            });
+        }
+
+        // Draw detection boxes on the image
+        function drawDetectionBoxes(data) {
+            // Remove any existing boxes
+            const existingBoxes = document.querySelectorAll('.detection-box');
+            existingBoxes.forEach(box => box.remove());
+
+            if (!data.detections || data.detections.length === 0) return;
+
+            // 获取图片在页面上的实际显示区域
+            const imgRect = img.getBoundingClientRect();
+            const containerRect = imageContainer.getBoundingClientRect();
+
+            // 计算图片相对于容器的偏移
+            const offsetLeft = img.offsetLeft;
+            const offsetTop = img.offsetTop;
+
+            // 用 naturalWidth/naturalHeight 作为原始尺寸
+            const naturalWidth = data.image ? data.image.width : img.naturalWidth;
+            const naturalHeight = data.image ? data.image.height : img.naturalHeight;
+
+            // 用 getBoundingClientRect() 的宽高作为显示尺寸
+            const displayWidth = imgRect.width;
+            const displayHeight = imgRect.height;
+
+            // Scale factors
+            const scaleX = displayWidth / naturalWidth;
+            const scaleY = displayHeight / naturalHeight;
+
+            data.detections.forEach(detection => {
+                const [x1, y1, x2, y2] = detection.bbox_absolute;
+
+                // Scale coordinates to match displayed image size
+                const scaledX1 = x1 * scaleX + offsetLeft;
+                const scaledY1 = y1 * scaleY + offsetTop;
+                const scaledWidth = (x2 - x1) * scaleX;
+                const scaledHeight = (y2 - y1) * scaleY;
+
+                // Create box element
+                const box = document.createElement('div');
+                box.className = 'detection-box';
+                box.style.left = `${scaledX1}px`;
+                box.style.top = `${scaledY1}px`;
+                box.style.width = `${scaledWidth}px`;
+                box.style.height = `${scaledHeight}px`;
+
+                // Color based on class
+                if (detection.class === 'person') {
+                    box.style.borderColor = 'red';
+                } else if (detection.class === 'car') {
+                    box.style.borderColor = 'blue';
+                } else {
+                    box.style.borderColor = 'green';
+                }
+
+                // Add label with class and confidence
+                const label = document.createElement('div');
+                label.className = 'detection-label';
+                label.textContent = `${detection.class} (${Math.round(detection.score * 100)}%)`;
+                box.appendChild(label);
+
+                // Add to image container
+                imageContainer.appendChild(box);
+            });
+        }
+
+        // Poll for updated system messages
+        function updateSystemMessages() {
+            fetch('/system-messages')
+                .then(response => response.json())
+                .then(messages => {
+                    const messagesContainer = document.getElementById('messages');
+                    messagesContainer.innerHTML = '';
+                    
+                    // Create message elements in reverse order (newest to oldest)
+                    messages.reverse().forEach(message => {
+                        const messageElement = document.createElement('div');
+                        messageElement.classList.add('message');
+                        messageElement.textContent = message;
+                        messagesContainer.appendChild(messageElement);
+                    });
+                })
+                .catch(error => console.error('Error fetching system messages:', error));
+        }
+
+        // Update system messages periodically
+        setInterval(updateSystemMessages, 2000);
+
+        // Initial system messages load
+        updateSystemMessages();
+    </script>
+</body>
+</html>
